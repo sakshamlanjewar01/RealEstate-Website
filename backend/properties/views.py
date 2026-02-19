@@ -1,3 +1,4 @@
+from re import search
 from rest_framework import generics
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
@@ -29,6 +30,7 @@ from .serializers import (
     ContactMessageSerializer,
     PropertySerializer,
     RegisterSerializer,
+    UserProfileSerializer,
     WishlistSerializer,
     InquirySerializer,
     ReviewSerializer,
@@ -81,6 +83,13 @@ class PropertyListCreateView(generics.ListCreateAPIView):
         bedrooms = self.request.query_params.get("bedrooms")
         ordering = self.request.query_params.get("ordering")
         my_properties = self.request.query_params.get("my_properties")
+        purpose = self.request.query_params.get("purpose")  # ✅ NEW
+
+        if not self.request.user.is_authenticated or not self.request.user.is_staff:
+            queryset = queryset.filter(is_available=True)
+
+        if my_properties == "true" and self.request.user.is_authenticated:
+            queryset = queryset.filter(owner=self.request.user)
 
         if search:
             queryset = queryset.filter(
@@ -103,8 +112,9 @@ class PropertyListCreateView(generics.ListCreateAPIView):
             else:
                 queryset = queryset.filter(bedrooms=bedrooms)
 
-        if my_properties == "true" and self.request.user.is_authenticated:
-            queryset = queryset.filter(owner=self.request.user)
+    # ✅ PURPOSE FILTER
+        if purpose:
+            queryset = queryset.filter(purpose=purpose)
 
         if ordering:
             queryset = queryset.order_by(ordering)
@@ -208,11 +218,74 @@ class BrokerInquiryListView(generics.ListAPIView):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        if self.request.user.is_staff:
-            return Inquiry.objects.filter(
-                property__owner=self.request.user
-            ).order_by("-created_at")
-        return Inquiry.objects.none()
+
+        user = self.request.user
+
+        # 🔐 Only brokers (is_staff) can access
+        if not user.is_authenticated or not user.is_staff:
+            return Inquiry.objects.none()
+
+        # ✅ Base queryset FIRST (IMPORTANT)
+        queryset = Inquiry.objects.filter(
+            property__owner=user
+        )
+
+        # ---------------- FILTERS ---------------- #
+
+        purpose = self.request.query_params.get("purpose")
+        status = self.request.query_params.get("status")
+        search = self.request.query_params.get("search")
+        start_date = self.request.query_params.get("start_date")
+        end_date = self.request.query_params.get("end_date")
+        ordering = self.request.query_params.get("ordering")
+        location = self.request.query_params.get("location")
+
+        # ✅ Filter by property purpose (buy/rent)
+        if purpose:
+            queryset = queryset.filter(property__purpose=purpose)
+
+        # ✅ Filter by status
+        if status:
+            queryset = queryset.filter(status=status)
+
+        # ✅ Search by name, email, property title
+        if search:
+            queryset = queryset.filter(
+                Q(name__icontains=search) |
+                Q(email__icontains=search) |
+                Q(property__title__icontains=search)
+            )
+
+        # ✅ Date range filtering
+        if start_date:
+            queryset = queryset.filter(created_at__date__gte=start_date)
+
+        if end_date:
+            queryset = queryset.filter(created_at__date__lte=end_date)
+
+        # ✅ SAFE MULTI LOCATION FILTER (property location)
+        if location:
+            locations = [
+                loc.strip()
+                for loc in location.split(",")
+                if loc.strip() != ""
+            ]
+
+            if locations:
+                location_query = Q()
+                for loc in locations:
+                    location_query |= Q(property__location__icontains=loc)
+
+                queryset = queryset.filter(location_query)
+
+        # ✅ Ordering
+        if ordering:
+            queryset = queryset.order_by(ordering)
+        else:
+            queryset = queryset.order_by("-created_at")
+
+        return queryset
+
 
 
 class InquiryUpdateView(generics.UpdateAPIView):
@@ -273,7 +346,7 @@ class BrokerAnalyticsView(APIView):
 
         six_months_ago = now() - timedelta(days=180)
 
-        # 🔁 Period Toggle
+        # Period Toggle
         if period == "daily":
             trunc_function = TruncDay
         elif period == "weekly":
@@ -303,23 +376,16 @@ class BrokerAnalyticsView(APIView):
             .order_by("period")
         )
 
-        # 🏆 Top Property
-        top_property = (
+        # ✅ SAFE PROPERTY RANKING (NO FIELD CONFLICT)
+        property_ranking = (
             properties
-            .annotate(view_count=Count("views"))
-            .order_by("-view_count")
-            .first()
+            .annotate(
+                total_views=Count("views"),
+                total_inquiries=Count("inquiries")
+            )
+            .values("id", "title", "total_views", "total_inquiries")
+            .order_by("-total_views")
         )
-
-        top_property_data = None
-
-        if top_property and top_property.view_count > 0:
-            top_property_data = {
-                "id": top_property.id,
-                "title": top_property.title,
-                "views": top_property.view_count,
-                "inquiries": top_property.inquiries.count(),
-            }
 
         return Response({
             "total_properties": total_properties,
@@ -328,7 +394,18 @@ class BrokerAnalyticsView(APIView):
             "conversion_rate": conversion_rate,
             "view_trend": list(view_trend),
             "inquiry_trend": list(inquiry_trend),
-            "top_property": top_property_data,
+
+            # 🔥 IMPORTANT PART
+            "property_ranking": [
+                {
+                    "id": p["id"],
+                    "title": p["title"],
+                    "views": p["total_views"],
+                    "inquiries": p["total_inquiries"],
+                }
+                for p in property_ranking
+            ],
+
             "period": period,
         })
 
@@ -337,14 +414,14 @@ class BrokerAnalyticsView(APIView):
 # ME
 # =====================================================
 
-class MeView(APIView):
+
+class MeView(generics.RetrieveUpdateAPIView):
+    serializer_class = UserProfileSerializer
     permission_classes = [IsAuthenticated]
 
-    def get(self, request):
-        return Response({
-            "username": request.user.username,
-            "is_broker": request.user.is_staff,
-        })
+    def get_object(self):
+        return self.request.user
+
 
 class ContactMessageCreateView(generics.CreateAPIView):
     queryset = ContactMessage.objects.all()

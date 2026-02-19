@@ -2,9 +2,9 @@ import { useState, useEffect } from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 import { BASE_URL } from "./api";
 import { getAccessToken, refreshAccessToken } from "./auth";
-
+import "leaflet/dist/leaflet.css";
 import Navbar from "./components/Navbar";
-
+import UserProfile from "./pages/UserProfile";
 import Home from "./pages/Home";
 import Properties from "./pages/Properties";
 import PropertyDetail from "./pages/PropertyDetail";
@@ -19,6 +19,9 @@ import BrokerAnalytics from "./pages/BrokerAnalytics";
 import BrokerInquiries from "./pages/BrokerInquiries";
 import Chat from "./pages/Chat";
 import AdminDashboard from "./pages/AdminDashboard";
+import { Toaster } from "react-hot-toast";
+import Settings from "./pages/Settings";
+
 
 function App() {
   const [user, setUser] = useState(null);
@@ -67,6 +70,8 @@ function App() {
 
   return (
     <>
+
+     <Toaster position="top-right" />
       <Navbar />
 
       <Routes>
@@ -81,6 +86,9 @@ function App() {
             <Route path="/about" element={<About />} />
             <Route path="/contact" element={<Contact />} />
             <Route path="/wishlist" element={<Wishlist />} />
+            <Route path="/profile" element={<UserProfile />} />
+            <Route path="/settings" element={<Settings />} />
+
           </>
         ) : (
           <>
@@ -90,6 +98,9 @@ function App() {
             <Route path="/add-property" element={<AddProperty />} />
             <Route path="/add-property/:id" element={<AddProperty />} />
             <Route path="/broker-inquiries" element={<BrokerInquiries />} />
+            <Route path="/profile" element={<UserProfile />} />
+            <Route path="/settings" element={<Settings />} />
+
           </>
         )}
 

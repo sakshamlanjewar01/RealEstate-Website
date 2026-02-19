@@ -1,120 +1,259 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import PropertyCard from "../components/PropertyCard";
 import { BASE_URL } from "../api";
 
 function Properties() {
   const [properties, setProperties] = useState([]);
-  const [loading, setLoading] = useState(true);
   const [pagination, setPagination] = useState({});
+  const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
 
-  const [query, setQuery] = useState("");
-  const [search, setSearch] = useState("");
-  const [ordering, setOrdering] = useState("");
+  /* ================= FILTER STATE ================= */
 
-  const [minPrice, setMinPrice] = useState("");
-  const [maxPrice, setMaxPrice] = useState("");
-  const [type, setType] = useState("");
-  const [bedrooms, setBedrooms] = useState("");
+const [filters, setFilters] = useState({
+  search: "",
+  min_price: 0,
+  max_price: 10000000,
+  type: "",
+  bedrooms: "",
+  ordering: "-created_at",
+  location: "",
+  purpose: "", // ✅ NEW
+});
+
+
+
+  const [debouncedFilters, setDebouncedFilters] = useState(filters);
+
+  const abortControllerRef = useRef(null);
+
+  /* ================= DEBOUNCE ================= */
 
   useEffect(() => {
-    const timer = setTimeout(() => setSearch(query), 500);
-    return () => clearTimeout(timer);
-  }, [query]);
+    const timeout = setTimeout(() => {
+      setDebouncedFilters(filters);
+      setPage(1); // reset page when filters change
+    }, 500);
+
+    return () => clearTimeout(timeout);
+  }, [filters]);
+
+  /* ================= FETCH PROPERTIES ================= */
 
   useEffect(() => {
-    setLoading(true);
+    const fetchProperties = async () => {
+      setLoading(true);
 
-    fetch(
-      `${BASE_URL}/api/properties/?page=${page}&search=${search}&min_price=${minPrice}&max_price=${maxPrice}&type=${type}&bedrooms=${bedrooms}&ordering=${ordering}`,
-    )
-      .then((res) => res.json())
-      .then((data) => {
+      // Cancel previous request
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
+
+      try {
+        const params = new URLSearchParams();
+
+        Object.entries(debouncedFilters).forEach(([key, value]) => {
+          if (value !== "" && value !== null && value !== undefined) {
+            params.append(key, value);
+          }
+        });
+
+        params.append("page", page);
+
+        const res = await fetch(
+          `${BASE_URL}/api/properties/?${params.toString()}`,
+          { signal: controller.signal }
+        );
+
+        if (!res.ok) {
+          throw new Error("Failed to fetch properties");
+        }
+
+        const data = await res.json();
+
         setProperties(data.results || []);
         setPagination(data);
+      } catch (error) {
+        if (error.name !== "AbortError") {
+          console.error("Fetch error:", error);
+        }
+      } finally {
         setLoading(false);
-      });
-  }, [search, minPrice, maxPrice, type, bedrooms, ordering, page]);
+      }
+    };
+
+    fetchProperties();
+
+    return () => {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+    };
+  }, [debouncedFilters, page]);
+
+  /* ================= RESET ================= */
+
+  const resetFilters = () => {
+    setFilters({
+      search: "",
+      min_price: 0,
+      max_price: 10000000,
+      type: "",
+      bedrooms: "",
+      ordering: "-created_at",
+      location: "",
+    });
+    setPage(1);
+  };
 
   return (
-    <div className="bg-white min-h-screen pt-28 px-6 text-gray-800">
-      <div className="max-w-6xl mx-auto text-center mb-14">
-        <h1 className="text-4xl font-bold text-yellow-500">
-          Explore Properties
-        </h1>
-      </div>
+    <div className="bg-gray-100 min-h-screen pt-24 px-4">
+      <div className="max-w-7xl mx-auto flex flex-col lg:flex-row gap-8">
 
-      {/* Filters */}
-      <div className="max-w-6xl mx-auto bg-white shadow-xl rounded-xl p-6 mb-14">
-        <div className="grid md:grid-cols-6 gap-4">
+        {/* ================= LEFT SIDEBAR ================= */}
+        <div className="lg:w-1/4 bg-white p-6 rounded-2xl shadow-lg space-y-6 sticky top-28 h-fit">
+
+          <h2 className="text-xl font-bold">Filters</h2>
+
+          {/* Search */}
           <input
-            placeholder="Search"
-            onChange={(e) => setQuery(e.target.value)}
-            className="border p-3 rounded-lg"
+            placeholder="Search property..."
+            value={filters.search}
+            onChange={(e) =>
+              setFilters({ ...filters, search: e.target.value })
+            }
+            className="w-full border p-3 rounded-lg"
           />
 
+          {/* Location */}
           <input
-            placeholder="Min Price"
-            onChange={(e) => setMinPrice(e.target.value)}
-            className="border p-3 rounded-lg"
+            placeholder="Mumbai, Pune..."
+            value={filters.location}
+            onChange={(e) =>
+              setFilters({ ...filters, location: e.target.value })
+            }
+            className="w-full border p-3 rounded-lg"
           />
-
-          <input
-            placeholder="Max Price"
-            onChange={(e) => setMaxPrice(e.target.value)}
-            className="border p-3 rounded-lg"
-          />
-
           <select
-            onChange={(e) => setType(e.target.value)}
-            className="border p-3 rounded-lg"
+  value={filters.purpose}
+  onChange={(e) =>
+    setFilters({ ...filters, purpose: e.target.value })
+  }
+  className="w-full border p-3 rounded-lg"
+>
+  <option value="">Buy or Rent</option>
+  <option value="buy">Buy</option>
+  <option value="rent">Rent</option>
+</select>
+
+
+          {/* Price */}
+          <div>
+            <label className="text-sm text-gray-500">Max Price</label>
+            <input
+              type="range"
+              min="0"
+              max="20000000"
+              step="50000"
+              value={filters.max_price}
+              onChange={(e) =>
+                setFilters({
+                  ...filters,
+                  max_price: Number(e.target.value),
+                })
+              }
+              className="w-full mt-2"
+            />
+            <p className="text-sm mt-1">
+              ₹{Number(filters.max_price).toLocaleString()}
+            </p>
+          </div>
+
+          {/* Type */}
+          <select
+            value={filters.type}
+            onChange={(e) =>
+              setFilters({ ...filters, type: e.target.value })
+            }
+            className="w-full border p-3 rounded-lg"
           >
-            <option value="">Type</option>
+            <option value="">All Types</option>
             <option value="apartment">Apartment</option>
             <option value="house">House</option>
             <option value="villa">Villa</option>
             <option value="plot">Plot</option>
           </select>
 
+          {/* Bedrooms */}
           <select
-            onChange={(e) => setBedrooms(e.target.value)}
-            className="border p-3 rounded-lg"
+            value={filters.bedrooms}
+            onChange={(e) =>
+              setFilters({ ...filters, bedrooms: e.target.value })
+            }
+            className="w-full border p-3 rounded-lg"
           >
-            <option value="">Bedrooms</option>
-            <option value="1">1</option>
-            <option value="2">2</option>
-            <option value="3">3</option>
-            <option value="4">4+</option>
+            <option value="">Any Bedrooms</option>
+            <option value="1">1 BHK</option>
+            <option value="2">2 BHK</option>
+            <option value="3">3 BHK</option>
+            <option value="4">4+ BHK</option>
           </select>
 
-          <select
-            onChange={(e) => setOrdering(e.target.value)}
-            className="border p-3 rounded-lg"
+          <button
+            onClick={resetFilters}
+            className="w-full bg-gray-200 py-3 rounded-lg hover:bg-gray-300 transition"
           >
-            <option value="">Sort By</option>
-            <option value="price">Price Low → High</option>
-            <option value="-price">Price High → Low</option>
-            <option value="-created_at">Newest</option>
-          </select>
+            Reset Filters
+          </button>
         </div>
-      </div>
 
-      {loading ? (
-        <div className="text-center text-yellow-500 text-xl">Loading...</div>
-      ) : (
-        <>
-          <div className="max-w-7xl mx-auto grid sm:grid-cols-2 lg:grid-cols-3 gap-10">
-            {properties.map((p) => (
-              <PropertyCard key={p.id} property={p} />
-            ))}
+        {/* ================= RIGHT SIDE ================= */}
+        <div className="lg:w-3/4">
+
+          <div className="flex justify-between items-center mb-6">
+            <h1 className="text-2xl font-bold">
+              {pagination.count || 0} Properties Found
+            </h1>
+
+            <select
+              value={filters.ordering}
+              onChange={(e) =>
+                setFilters({ ...filters, ordering: e.target.value })
+              }
+              className="border p-2 rounded-lg"
+            >
+              <option value="-created_at">Newest</option>
+              <option value="price">Price Low → High</option>
+              <option value="-price">Price High → Low</option>
+              <option value="-views_count">Most Popular</option>
+            </select>
           </div>
+
+          {loading ? (
+            <div className="text-center text-indigo-600 text-xl">
+              Loading...
+            </div>
+          ) : properties.length === 0 ? (
+            <div className="text-center text-gray-500 mt-20">
+              No properties found.
+            </div>
+          ) : (
+            <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-8">
+              {properties.map((p) => (
+                <PropertyCard key={p.id} property={p} />
+              ))}
+            </div>
+          )}
 
           {/* Pagination */}
           <div className="flex justify-center gap-6 mt-10">
             {pagination.previous && (
               <button
                 onClick={() => setPage(page - 1)}
-                className="px-6 py-2 bg-gray-200 rounded"
+                className="px-6 py-2 bg-gray-200 rounded-lg"
               >
                 Previous
               </button>
@@ -123,14 +262,15 @@ function Properties() {
             {pagination.next && (
               <button
                 onClick={() => setPage(page + 1)}
-                className="px-6 py-2 bg-yellow-500 text-white rounded"
+                className="px-6 py-2 bg-indigo-600 text-white rounded-lg"
               >
                 Next
               </button>
             )}
           </div>
-        </>
-      )}
+
+        </div>
+      </div>
     </div>
   );
 }

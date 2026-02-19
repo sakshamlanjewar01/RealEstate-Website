@@ -2,9 +2,44 @@ import { useState, useEffect } from "react";
 import { BASE_URL } from "../api";
 import { getToken } from "../auth";
 import { useNavigate, useParams } from "react-router-dom";
+import { MapContainer, TileLayer, Marker, useMapEvents } from "react-leaflet";
+import L from "leaflet";
+import "leaflet/dist/leaflet.css";
+
+/* ================= FIX LEAFLET ICON ================= */
+
+delete L.Icon.Default.prototype._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl:
+    "https://unpkg.com/leaflet@1.7.1/dist/images/marker-icon-2x.png",
+  iconUrl:
+    "https://unpkg.com/leaflet@1.7.1/dist/images/marker-icon.png",
+  shadowUrl:
+    "https://unpkg.com/leaflet@1.7.1/dist/images/marker-shadow.png",
+});
+
+/* ================= MAP CLICK PICKER ================= */
+
+function LocationPicker({ setForm }) {
+  useMapEvents({
+    click(e) {
+      setForm((prev) => ({
+        ...prev,
+        latitude: e.latlng.lat,
+        longitude: e.latlng.lng,
+      }));
+    },
+  });
+  return null;
+}
+
+/* ================= MAIN COMPONENT ================= */
 
 function AddProperty() {
-  const [form, setForm] = useState({});
+  const [form, setForm] = useState({
+    purpose: "buy", // ✅ Default Buy
+  });
+
   const [images, setImages] = useState([]);
   const [loading, setLoading] = useState(false);
 
@@ -12,15 +47,16 @@ function AddProperty() {
   const { id } = useParams();
   const isEdit = Boolean(id);
 
+  /* ================= AUTH + EDIT FETCH ================= */
+
   useEffect(() => {
     const token = getToken();
-
     if (!token) {
       navigate("/login");
       return;
     }
 
-    // 🔐 Check broker
+    // Check broker
     fetch(`${BASE_URL}/api/me/`, {
       headers: { Authorization: `Bearer ${token}` },
     })
@@ -29,215 +65,239 @@ function AddProperty() {
         if (!data.is_broker) navigate("/");
       });
 
-    // 📝 Edit Mode
+    // Edit Mode
     if (isEdit) {
-      fetch(`${BASE_URL}/api/properties/${id}/`)
+      fetch(`${BASE_URL}/api/properties/${id}/`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
         .then((res) => res.json())
         .then((data) => {
-          const cleanedData = {
+          setForm({
             ...data,
-            amenities: data.amenities
-              ? data.amenities.map((a) =>
-                  typeof a === "object" ? a.id : a
-                )
-              : [],
-          };
-
-          setForm(cleanedData);
+            purpose: data.purpose || "buy",
+            latitude: data.latitude || "",
+            longitude: data.longitude || "",
+          });
         })
         .catch(() => navigate("/my-properties"));
     }
   }, [id, isEdit, navigate]);
 
-  const handleSubmit = async () => {
-    setLoading(true);
+  /* ================= SUBMIT ================= */
 
-    const token = getToken();
-    if (!token) {
-      navigate("/login");
-      return;
-    }
+const handleSubmit = async () => {
+  setLoading(true);
+  const token = getToken();
+  const data = new FormData();
 
-    const data = new FormData();
+  Object.keys(form).forEach((key) => {
+    const value = form[key];
 
-    // ✅ ONLY ALLOWED FIELDS (FIXES 500 ERROR)
-    const allowedFields = [
-      "title",
-      "description",
-      "price",
-      "location",
-      "property_type",
-      "bedrooms",
-      "bathrooms",
-      "area",
-      "is_available",
-      "latitude",
-      "longitude",
-      "amenities",
-      "image",
-    ];
-
-    allowedFields.forEach((key) => {
-  if (form[key] !== null && form[key] !== undefined) {
-
-    // 🔥 DO NOT SEND IMAGE URL STRING
-    if (key === "image") {
-      if (form.image instanceof File) {
-        data.append("image", form.image);
-      }
-      return;
-    }
-
-    if (Array.isArray(form[key])) {
-      form[key].forEach((value) => {
+    if (
+      value !== null &&
+      value !== undefined &&
+      value !== ""
+    ) {
+      // ✅ If array (like amenities)
+      if (Array.isArray(value)) {
+        value.forEach((v) => {
+          data.append(key, v);
+        });
+      } else {
         data.append(key, value);
-      });
-    } else {
-      data.append(key, form[key]);
-    }
-  }
-});
-
-
-    // ✅ MULTIPLE IMAGE UPLOAD
-    images.forEach((img) => {
-      data.append("uploaded_images", img);
-    });
-
-    try {
-      const res = await fetch(
-        `${BASE_URL}/api/properties/${isEdit ? id + "/" : ""}`,
-        {
-          method: isEdit ? "PATCH" : "POST",
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-          body: data,
-        }
-      );
-
-      if (!res.ok) {
-        // ✅ SAFE ERROR HANDLING (NO JSON CRASH)
-        const text = await res.text();
-        console.log("Backend Error:", text);
-        alert("Error: " + text);
-        setLoading(false);
-        return;
       }
-
-      navigate("/my-properties");
-    } catch (error) {
-      console.error(error);
-      alert("Something went wrong while saving property.");
     }
+  });
 
+  // ✅ Multiple images
+  images.forEach((img) => {
+    data.append("uploaded_images", img);
+  });
+
+  const res = await fetch(
+    `${BASE_URL}/api/properties/${isEdit ? id + "/" : ""}`,
+    {
+      method: isEdit ? "PATCH" : "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      body: data,
+    }
+  );
+
+  const responseData = await res.json();
+
+  if (!res.ok) {
+    console.log("SERVER ERROR:", responseData);
+    alert("Error saving property");
     setLoading(false);
-  };
+    return;
+  }
+
+  navigate("/my-properties");
+};
+
+
+
+  /* ================= UI ================= */
 
   return (
-    <div className="bg-white min-h-screen pt-28 px-6">
-      <div className="max-w-3xl mx-auto bg-white shadow-2xl p-10 rounded-xl">
-        <h2 className="text-3xl font-bold text-yellow-500 mb-8 text-center">
-          {isEdit ? "Edit Property" : "Add Property"}
+    <div className="min-h-screen bg-gray-100 py-24 px-4">
+      <div className="max-w-5xl mx-auto bg-white shadow-2xl rounded-2xl p-10 space-y-10">
+
+        <h2 className="text-3xl font-bold text-gray-800">
+          {isEdit ? "Edit Property" : "Add New Property"}
         </h2>
 
-        <input
-          className="input"
-          placeholder="Title"
-          value={form.title || ""}
-          onChange={(e) => setForm({ ...form, title: e.target.value })}
-        />
+        {/* ================= BASIC INFO ================= */}
 
-        <textarea
-          className="input"
-          placeholder="Description"
-          value={form.description || ""}
-          onChange={(e) => setForm({ ...form, description: e.target.value })}
-        />
+        <Section title="Basic Information">
+          <Input
+            label="Title"
+            value={form.title}
+            onChange={(v) => setForm({ ...form, title: v })}
+          />
 
-        <input
-          type="number"
-          className="input"
-          placeholder="Price"
-          value={form.price || ""}
-          onChange={(e) => setForm({ ...form, price: e.target.value })}
-        />
+          <Textarea
+            label="Description"
+            value={form.description}
+            onChange={(v) => setForm({ ...form, description: v })}
+          />
 
-        <input
-          className="input"
-          placeholder="Location"
-          value={form.location || ""}
-          onChange={(e) => setForm({ ...form, location: e.target.value })}
-        />
+          <Input
+            label="Price (₹)"
+            type="number"
+            value={form.price}
+            onChange={(v) => setForm({ ...form, price: v })}
+          />
 
-        <select
-          className="input"
-          value={form.property_type || ""}
-          onChange={(e) =>
-            setForm({ ...form, property_type: e.target.value })
-          }
-        >
-          <option value="">Property Type</option>
-          <option value="apartment">Apartment</option>
-          <option value="house">House</option>
-          <option value="villa">Villa</option>
-          <option value="plot">Plot</option>
-        </select>
+          <Input
+            label="Location Name"
+            value={form.location}
+            onChange={(v) => setForm({ ...form, location: v })}
+          />
+        </Section>
 
-        <input
-          type="number"
-          className="input"
-          placeholder="Bedrooms"
-          value={form.bedrooms || ""}
-          onChange={(e) => setForm({ ...form, bedrooms: e.target.value })}
-        />
+        {/* ================= PROPERTY DETAILS ================= */}
 
-        <input
-          type="number"
-          className="input"
-          placeholder="Bathrooms"
-          value={form.bathrooms || ""}
-          onChange={(e) => setForm({ ...form, bathrooms: e.target.value })}
-        />
+        <Section title="Property Details">
+          <Select
+            label="Property Type"
+            value={form.property_type}
+            onChange={(v) =>
+              setForm({ ...form, property_type: v })
+            }
+            options={[
+              { value: "apartment", label: "Apartment" },
+              { value: "house", label: "House" },
+              { value: "villa", label: "Villa" },
+              { value: "plot", label: "Plot" },
+            ]}
+          />
 
-        <input
-          type="number"
-          className="input"
-          placeholder="Area (sqft)"
-          value={form.area || ""}
-          onChange={(e) => setForm({ ...form, area: e.target.value })}
-        />
+          <Input
+            label="Bedrooms"
+            type="number"
+            value={form.bedrooms}
+            onChange={(v) => setForm({ ...form, bedrooms: v })}
+          />
 
-        <input
-          type="file"
-          className="mb-4"
-          onChange={(e) =>
-            setForm({ ...form, image: e.target.files[0] })
-          }
-        />
+          <Input
+            label="Bathrooms"
+            type="number"
+            value={form.bathrooms}
+            onChange={(v) => setForm({ ...form, bathrooms: v })}
+          />
 
-        <input
-          type="file"
-          multiple
-          className="mb-6"
-          onChange={(e) => setImages([...e.target.files])}
-        />
+          <Input
+            label="Area (sqft)"
+            type="number"
+            value={form.area}
+            onChange={(v) => setForm({ ...form, area: v })}
+          />
 
-        <label className="flex items-center gap-3 mb-6">
+          {/* ✅ BUY / RENT FIELD */}
+          <Select
+            label="Purpose"
+            value={form.purpose}
+            onChange={(v) => setForm({ ...form, purpose: v })}
+            options={[
+              { value: "buy", label: "Buy" },
+              { value: "rent", label: "Rent" },
+            ]}
+          />
+        </Section>
+
+        {/* ================= MAP ================= */}
+
+        <Section title="Geo Location (Click on Map)">
+          <div className="h-80 rounded-xl overflow-hidden">
+            <MapContainer
+              center={[19.076, 72.8777]}
+              zoom={13}
+              className="h-full w-full"
+            >
+              <TileLayer
+                url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+              />
+              <LocationPicker setForm={setForm} />
+              {form.latitude && form.longitude && (
+                <Marker
+                  position={[form.latitude, form.longitude]}
+                />
+              )}
+            </MapContainer>
+          </div>
+
+          {form.latitude && (
+            <div className="text-sm text-gray-600 mt-2">
+              Selected: {form.latitude}, {form.longitude}
+            </div>
+          )}
+        </Section>
+
+        {/* ================= IMAGES ================= */}
+
+        <Section title="Images">
           <input
-            type="checkbox"
-            checked={form.is_available || false}
+            type="file"
             onChange={(e) =>
-              setForm({ ...form, is_available: e.target.checked })
+              setForm({ ...form, image: e.target.files[0] })
             }
           />
-          Available
-        </label>
+          <input
+            type="file"
+            multiple
+            onChange={(e) =>
+              setImages([...e.target.files])
+            }
+          />
+        </Section>
+
+        {/* ================= AVAILABILITY ================= */}
+
+        <Section title="Availability">
+          <label className="flex items-center gap-3">
+            <input
+              type="checkbox"
+              checked={form.is_available || false}
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  is_available: e.target.checked,
+                })
+              }
+            />
+            Available
+          </label>
+        </Section>
+
+        {/* ================= SUBMIT ================= */}
 
         <button
           onClick={handleSubmit}
           disabled={loading}
-          className="w-full bg-yellow-500 text-white py-3 rounded-lg font-semibold hover:bg-black transition"
+          className="w-full bg-indigo-600 text-white py-3 rounded-lg font-semibold hover:bg-indigo-700 transition"
         >
           {loading
             ? "Saving..."
@@ -246,6 +306,84 @@ function AddProperty() {
             : "Add Property"}
         </button>
       </div>
+    </div>
+  );
+}
+
+/* ================= REUSABLE COMPONENTS ================= */
+
+function Section({ title, children }) {
+  return (
+    <div className="space-y-4">
+      <h3 className="text-xl font-semibold text-gray-700">
+        {title}
+      </h3>
+      <div className="grid md:grid-cols-2 gap-4">
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function Input({ label, value, onChange, type = "text" }) {
+  return (
+    <div>
+      <label className="block text-sm text-gray-500 mb-1">
+        {label}
+      </label>
+      <input
+        type={type}
+        value={value || ""}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full border rounded-lg p-3 focus:ring-2 focus:ring-indigo-500"
+      />
+    </div>
+  );
+}
+
+function Textarea({ label, value, onChange }) {
+  return (
+    <div className="md:col-span-2">
+      <label className="block text-sm text-gray-500 mb-1">
+        {label}
+      </label>
+      <textarea
+        value={value || ""}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full border rounded-lg p-3 h-28 focus:ring-2 focus:ring-indigo-500"
+      />
+    </div>
+  );
+}
+
+/* ✅ SAFE SELECT (No more .map crash) */
+function Select({
+  label,
+  value,
+  onChange,
+  options = [],
+}) {
+  return (
+    <div>
+      <label className="block text-sm text-gray-500 mb-1">
+        {label}
+      </label>
+      <select
+        value={value || ""}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full border rounded-lg p-3"
+      >
+        <option value="">Select</option>
+
+        {options?.map((opt) => (
+          <option
+            key={opt.value}
+            value={opt.value}
+          >
+            {opt.label}
+          </option>
+        ))}
+      </select>
     </div>
   );
 }

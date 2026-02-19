@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef, useMemo } from "react";
 import { BASE_URL } from "../api";
 import { getToken } from "../auth";
 import { useNavigate } from "react-router-dom";
-import { Bar } from "react-chartjs-2";
+import { Bar, Doughnut } from "react-chartjs-2";
 import {
   Chart as ChartJS,
   BarElement,
@@ -10,19 +10,42 @@ import {
   LinearScale,
   Tooltip,
   Legend,
+  ArcElement,
 } from "chart.js";
+import CountUp from "react-countup";
+import { motion } from "framer-motion";
+import jsPDF from "jspdf";
+import html2canvas from "html2canvas";
+import * as XLSX from "xlsx";
 
-ChartJS.register(BarElement, CategoryScale, LinearScale, Tooltip, Legend);
+ChartJS.register(
+  BarElement,
+  CategoryScale,
+  LinearScale,
+  Tooltip,
+  Legend,
+  ArcElement
+);
 
 function BrokerAnalytics() {
   const [stats, setStats] = useState(null);
-  const [period, setPeriod] = useState("monthly");
   const [loading, setLoading] = useState(true);
+  const [darkMode, setDarkMode] = useState(false);
+
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
+  const [searchTitle, setSearchTitle] = useState("");
+  const [minViews, setMinViews] = useState("");
+  const [minInquiries, setMinInquiries] = useState("");
+  const [sortBy, setSortBy] = useState("");
+
   const navigate = useNavigate();
+  const dashboardRef = useRef();
+
+  /* ---------------- FETCH DATA ---------------- */
 
   useEffect(() => {
     const token = getToken();
-
     if (!token) {
       navigate("/login");
       return;
@@ -30,9 +53,12 @@ function BrokerAnalytics() {
 
     setLoading(true);
 
-    fetch(`${BASE_URL}/api/broker/analytics/?period=${period}`, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
+    fetch(
+      `${BASE_URL}/api/broker/analytics/?start=${startDate}&end=${endDate}`,
+      {
+        headers: { Authorization: `Bearer ${token}` },
+      }
+    )
       .then((res) => res.json())
       .then((data) => {
         setStats(data);
@@ -42,11 +68,65 @@ function BrokerAnalytics() {
         setStats(null);
         setLoading(false);
       });
-  }, [navigate, period]);
+  }, [navigate, startDate, endDate]);
+
+  /* ---------------- PDF DOWNLOAD ---------------- */
+
+  const downloadPDF = async () => {
+    const element = dashboardRef.current;
+    const canvas = await html2canvas(element);
+    const imgData = canvas.toDataURL("image/png");
+
+    const pdf = new jsPDF("p", "mm", "a4");
+    const imgWidth = 210;
+    const imgHeight = (canvas.height * imgWidth) / canvas.width;
+
+    pdf.addImage(imgData, "PNG", 0, 0, imgWidth, imgHeight);
+    pdf.save("broker_analytics.pdf");
+  };
+
+  /* ---------------- EXCEL DOWNLOAD ---------------- */
+
+  const downloadExcel = () => {
+    if (!filteredRanking.length) return;
+
+    const worksheet = XLSX.utils.json_to_sheet(filteredRanking);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Analytics");
+    XLSX.writeFile(workbook, "broker_analytics.xlsx");
+  };
+
+  /* ---------------- FILTER LOGIC ---------------- */
+
+  const filteredRanking = useMemo(() => {
+    if (!stats?.property_ranking) return [];
+
+    let data = stats.property_ranking.map((item, index) => ({
+      id: item.id || index,
+      title: item.title || item.property_title || "Untitled",
+      views: Number(item.views) || 0,
+      inquiries: Number(item.inquiries) || 0,
+    }));
+
+    if (searchTitle)
+      data = data.filter((p) =>
+        p.title.toLowerCase().includes(searchTitle.toLowerCase())
+      );
+
+    if (minViews) data = data.filter((p) => p.views >= Number(minViews));
+    if (minInquiries)
+      data = data.filter((p) => p.inquiries >= Number(minInquiries));
+
+    if (sortBy === "views") data.sort((a, b) => b.views - a.views);
+    if (sortBy === "inquiries")
+      data.sort((a, b) => b.inquiries - a.inquiries);
+
+    return data;
+  }, [stats, searchTitle, minViews, minInquiries, sortBy]);
 
   if (loading) {
     return (
-      <div className="pt-28 text-center text-yellow-500 text-xl">
+      <div className="pt-28 text-center text-indigo-600 text-xl">
         Loading Analytics...
       </div>
     );
@@ -60,97 +140,155 @@ function BrokerAnalytics() {
     );
   }
 
-  const viewTrend = stats?.view_trend || [];
-  const inquiryTrend = stats?.inquiry_trend || [];
-
-  const chartData = {
-    labels: viewTrend.map((item) =>
-      new Date(item.period).toLocaleDateString()
+  const performanceChart = {
+    labels: stats.view_trend?.map((i) =>
+      new Date(i.period).toLocaleDateString()
     ),
     datasets: [
       {
         label: "Views",
-        data: viewTrend.map((item) => item.count),
-        backgroundColor: "#facc15",
+        data: stats.view_trend?.map((i) => i.count),
+        backgroundColor: "#6366f1",
       },
       {
         label: "Inquiries",
-        data: inquiryTrend.map((item) => item.count),
-        backgroundColor: "#000000",
+        data: stats.inquiry_trend?.map((i) => i.count),
+        backgroundColor: "#f59e0b",
+      },
+    ],
+  };
+
+  const conversionChart = {
+    labels: ["Inquiries", "Remaining Views"],
+    datasets: [
+      {
+        data: [
+          stats.total_inquiries,
+          stats.total_views - stats.total_inquiries,
+        ],
+        backgroundColor: ["#6366f1", "#e5e7eb"],
       },
     ],
   };
 
   return (
-    <div className="pt-28 px-6 bg-gray-50 min-h-screen">
-      <h1 className="text-4xl font-bold mb-10">Broker CRM Dashboard</h1>
-
-      {/* PERIOD TOGGLE */}
-      <div className="mb-8 flex gap-4">
-        {["daily", "weekly", "monthly"].map((p) => (
-          <button
-            key={p}
-            onClick={() => setPeriod(p)}
-            className={`px-4 py-2 rounded ${
-              period === p
-                ? "bg-black text-white"
-                : "bg-yellow-500 text-white"
-            }`}
-          >
-            {p}
-          </button>
-        ))}
-      </div>
-
-      {/* STATS */}
-      <div className="grid md:grid-cols-4 gap-6 mb-12">
-        <Stat title="Properties" value={stats.total_properties} />
-        <Stat title="Inquiries" value={stats.total_inquiries} />
-        <Stat title="Views" value={stats.total_views} />
-        <Stat title="Conversion %" value={stats.conversion_rate + "%"} />
-      </div>
-
-      {/* TOP PROPERTY */}
-      {stats?.top_property && (
-        <div className="bg-white p-6 rounded-xl shadow mb-10">
-          <h2 className="text-xl font-bold mb-2">Top Performing Property</h2>
-          <p className="font-semibold">{stats.top_property.title}</p>
-          <p className="text-yellow-500">
-            {stats.top_property.views} views
+    <motion.div
+      ref={dashboardRef}
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      className={`pt-28 px-6 min-h-screen transition ${
+        darkMode ? "bg-gray-900 text-white" : "bg-gray-100 text-black"
+      }`}
+    >
+      {/* HEADER */}
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-10 gap-6">
+        <div>
+          <h1 className="text-4xl font-bold">
+            Broker Performance Dashboard
+          </h1>
+          <p className="text-gray-500 mt-2">
+            Track property performance & lead conversion
           </p>
         </div>
-      )}
 
-      {/* RECENT INQUIRIES */}
-      {stats?.recent_inquiries && (
-        <div className="bg-white p-6 rounded-xl shadow mb-10">
-          <h2 className="text-xl font-bold mb-4">Recent Inquiries</h2>
-          {stats.recent_inquiries.map((inq) => (
-            <div key={inq.id} className="border-b py-2">
-              <p className="font-semibold">{inq.name}</p>
-              <p className="text-gray-500 text-sm">
-                {inq.property_title}
-              </p>
-            </div>
-          ))}
+        <div className="flex gap-3 flex-wrap">
+          <button
+            onClick={downloadPDF}
+            className="px-4 py-2 bg-red-600 text-white rounded-lg"
+          >
+            Export PDF
+          </button>
+
+          <button
+            onClick={downloadExcel}
+            className="px-4 py-2 bg-green-600 text-white rounded-lg"
+          >
+            Export Excel
+          </button>
+
+          <button
+            onClick={() => setDarkMode(!darkMode)}
+            className="px-4 py-2 bg-indigo-600 text-white rounded-lg"
+          >
+            {darkMode ? "Light Mode" : "Dark Mode"}
+          </button>
         </div>
-      )}
-
-      {/* PERFORMANCE CHART */}
-      <div className="bg-white p-6 rounded-xl shadow">
-        <h2 className="text-xl font-bold mb-4">Performance Trend</h2>
-        <Bar data={chartData} />
       </div>
-    </div>
+
+      {/* KPI CARDS */}
+      <div className="grid md:grid-cols-4 gap-6 mb-10">
+        <StatCard title="Total Properties" value={stats.total_properties} />
+        <StatCard title="Total Inquiries" value={stats.total_inquiries} />
+        <StatCard title="Total Views" value={stats.total_views} />
+        <StatCard
+          title="Conversion Rate"
+          value={stats.conversion_rate}
+          suffix="%"
+        />
+      </div>
+
+      {/* FILTER SECTION */}
+      <div className="bg-white p-6 rounded-2xl shadow-lg mb-10">
+        <div className="grid md:grid-cols-6 gap-4">
+          <input type="date" onChange={(e) => setStartDate(e.target.value)} className="border p-2 rounded"/>
+          <input type="date" onChange={(e) => setEndDate(e.target.value)} className="border p-2 rounded"/>
+          <input placeholder="Search Title" onChange={(e)=>setSearchTitle(e.target.value)} className="border p-2 rounded"/>
+          <input placeholder="Min Views" onChange={(e)=>setMinViews(e.target.value)} className="border p-2 rounded"/>
+          <input placeholder="Min Inquiries" onChange={(e)=>setMinInquiries(e.target.value)} className="border p-2 rounded"/>
+          <select onChange={(e)=>setSortBy(e.target.value)} className="border p-2 rounded">
+            <option value="">Sort By</option>
+            <option value="views">Views</option>
+            <option value="inquiries">Inquiries</option>
+          </select>
+        </div>
+      </div>
+
+      {/* TABLE */}
+      <div className="bg-white p-6 rounded-2xl shadow-lg mb-12 overflow-x-auto">
+        <table className="w-full">
+          <thead>
+            <tr className="border-b bg-gray-50">
+              <th className="py-3 text-left">Property</th>
+              <th className="text-left">Views</th>
+              <th className="text-left">Inquiries</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filteredRanking.map((p) => (
+              <tr key={p.id} className="border-b hover:bg-gray-50">
+                <td className="py-3">{p.title}</td>
+                <td>{p.views}</td>
+                <td>{p.inquiries}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* CHARTS */}
+      <div className="grid lg:grid-cols-2 gap-8">
+        <div className="bg-white p-6 rounded-2xl shadow-lg">
+          <Bar data={performanceChart} />
+        </div>
+        <div className="bg-white p-6 rounded-2xl shadow-lg">
+          <Doughnut data={conversionChart} />
+        </div>
+      </div>
+    </motion.div>
   );
 }
 
-function Stat({ title, value }) {
+/* ---------------- COMPONENTS ---------------- */
+
+function StatCard({ title, value, suffix = "" }) {
   return (
-    <div className="bg-yellow-400 text-white p-6 rounded-xl shadow">
-      <p>{title}</p>
-      <h2 className="text-3xl font-bold mt-2">{value}</h2>
-    </div>
+    <motion.div whileHover={{ scale: 1.05 }}
+      className="bg-white p-6 rounded-2xl shadow-lg border-l-4 border-indigo-500">
+      <p className="text-gray-500">{title}</p>
+      <h2 className="text-3xl font-bold mt-2">
+        <CountUp end={value} duration={1.5} />{suffix}
+      </h2>
+    </motion.div>
   );
 }
 

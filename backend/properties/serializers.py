@@ -9,6 +9,15 @@ from .models import (
     ContactMessage,
     Amenity
 )
+from django.contrib.auth.models import User
+from rest_framework import serializers
+
+class UserProfileSerializer(serializers.ModelSerializer):
+    is_broker = serializers.BooleanField(source="is_staff", read_only=True)
+
+    class Meta:
+        model = User
+        fields = ["username", "email", "is_broker", "date_joined"]
 
 class PropertyImageSerializer(serializers.ModelSerializer):
     image = serializers.SerializerMethodField()

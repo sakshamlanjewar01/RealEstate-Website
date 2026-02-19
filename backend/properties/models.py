@@ -20,6 +20,18 @@ class Property(models.Model):
         ('plot', 'Plot'),
     ]
 
+    PURPOSE_CHOICES = (
+    ("buy", "Buy"),
+    ("rent", "Rent"),
+    )
+
+    purpose = models.CharField(
+    max_length=10,
+    choices=PURPOSE_CHOICES,
+    default="buy"
+    )
+
+
     image = models.ImageField(upload_to="property_images/", null=True, blank=True)
 
     title = models.CharField(max_length=200, db_index=True)
